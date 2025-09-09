@@ -367,7 +367,8 @@ class SimpleMapTRAssigner:
                  iou_cost=dict(type='IoUCost', weight=0.0),
                  pts_cost=dict(type='ChamferDistance', loss_src_weight=1.0, loss_dst_weight=1.0),
                  pc_range=None):
-        self.pc_range = pc_range or [-25.0, -25.0, -5.0, 25.0, 25.0, 5.0]
+        # self.pc_range = pc_range or [-25.0, -25.0, -5.0, 25.0, 25.0, 5.0]
+        self.pc_range = pc_range or [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
         
         # 根据配置初始化成本计算器
         self.cls_cost = self._build_cost(cls_cost)

@@ -265,15 +265,15 @@ def eval_maptr_stability_index(cur_det_annos, pre_det_annos, cur_gt_annos, pre_g
         cur_aligned_polylines, cur_aligned_scores = align_det_and_gt_by_maptr_assigner(
             cur_det_polylines, cur_det_types, 
             cur_gt_polylines, gt_types, class_names, 
-            # pc_range=[-15.0, -30.0, -2.0, 15.0, 30.0, 2.0],
-            pc_range=[-25.0, -25.0, -5.0, 25.0, 25.0, 5.0], 
+            pc_range=[-15.0, -30.0, -2.0, 15.0, 30.0, 2.0],
+            # pc_range=[-25.0, -25.0, -5.0, 25.0, 25.0, 5.0], 
             det_scores=cur_det_scores)
         
         pre_aligned_polylines, pre_aligned_scores = align_det_and_gt_by_maptr_assigner(
             pre_det_polylines, pre_det_types, 
             pre_gt_polylines, gt_types, class_names, 
-            # pc_range=[-15.0, -30.0, -2.0, 15.0, 30.0, 2.0], 
-            pc_range=[-25.0, -25.0, -5.0, 25.0, 25.0, 5.0],
+            pc_range=[-15.0, -30.0, -2.0, 15.0, 30.0, 2.0], 
+            # pc_range=[-25.0, -25.0, -5.0, 25.0, 25.0, 5.0],
             det_scores=pre_det_scores)
         
         # 存储配对信息

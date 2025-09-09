@@ -40,8 +40,8 @@ def parse_args():
     parser.add_argument('--detection-threshold', type=float, default=0.3,
                        help='检测阈值，低于此值的预测视为未检测到 (默认: 0.3)')
     parser.add_argument('--pc-range', type=float, nargs=6, 
-                    #    default=[-15.0, -30.0, -2.0, 15.0, 30.0, 2.0],
-                    default=[-25.0, -25.0, -5.0, 25.0, 25.0, 5.0],
+                       default=[-15.0, -30.0, -2.0, 15.0, 30.0, 2.0],
+                    # default=[-25.0, -25.0, -5.0, 25.0, 25.0, 5.0],
                        help='点云范围 [xmin,ymin,zmin,xmax,ymax,zmax] (默认: -25.0 -25.0 -5.0 25.0 25.0 5.0)')
     parser.add_argument('--num-sample-points', type=int, default=50,
                        help='折线重采样点数 (默认: 50)')

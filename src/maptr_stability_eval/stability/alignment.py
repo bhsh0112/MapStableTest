@@ -94,7 +94,8 @@ def align_det_and_gt_by_maptr_assigner(det_polylines, det_types, gt_polylines, g
         aligned_scores: 对齐后的分数列表
     """
     if pc_range is None:
-        pc_range = [-25.0, -25.0, -5.0, 25.0, 25.0, 5.0]
+        # pc_range = [-25.0, -25.0, -5.0, 25.0, 25.0, 5.0]
+        pc_range = [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
     name_to_id = {name: idx for idx, name in enumerate(class_names)}
 
     num_pred = len(det_polylines)
