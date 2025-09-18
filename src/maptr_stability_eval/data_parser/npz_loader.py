@@ -509,29 +509,39 @@ def _convert_pivotnet_format(npz_data, token, config):
         valid_scores = []
         
         for i, polyline in enumerate(map_data):
-            if polyline is not None and len(polyline) > 0:
-                valid_polylines.append(polyline)
-                # 使用pred_label作为类别标签
-                if i < len(pred_label):
-                    # PivotNet的标签映射：0=divider, 1=ped_crossing, 2=boundary
-                    # 但实际输出中可能有3，需要映射到0-2
-                    label = pred_label[i]
-                    if label == 3:  # 将3映射为2 (boundary)
-                        label = 2
-                    valid_labels.append(label)
+            if polyline is None or len(polyline) == 0:
+                continue
+            # 标签映射（来自配置：0=None, 1=divider, 2=ped_crossing, 3=boundary）
+            # 评测内部使用: 0=divider, 1=ped_crossing, 2=boundary
+            mapped_label = None
+            if i < len(pred_label):
+                raw_label = int(pred_label[i])
+                if raw_label == 1:
+                    mapped_label = 0
+                elif raw_label == 2:
+                    mapped_label = 1
+                elif raw_label == 3:
+                    mapped_label = 2
                 else:
-                    valid_labels.append(0)  # 默认divider
-                
-                # 使用confidence_level作为分数
-                if i < len(confidence_level):
-                    score = confidence_level[i]
-                    # -1 表示无效/未检测，置为 0.0 以便后续过滤
-                    if score == -1:
-                        score = 0.0
-                    valid_scores.append(float(score))
-                else:
-                    # 未提供分数则视为未检测
-                    valid_scores.append(0.0)
+                    # raw_label==0 或其它非法，跳过（None 类别不参与评估）
+                    mapped_label = None
+            # 若缺失标签，视为无效，跳过
+            if mapped_label is None:
+                continue
+
+            valid_polylines.append(polyline)
+            valid_labels.append(mapped_label)
+
+            # 使用confidence_level作为分数
+            if i < len(confidence_level):
+                score = confidence_level[i]
+                # -1 表示无效/未检测，置为 0.0 以便后续过滤
+                if score == -1:
+                    score = 0.0
+                valid_scores.append(float(score))
+            else:
+                # 未提供分数则视为未检测
+                valid_scores.append(0.0)
         
         if not valid_polylines:
             print(f"Warning: 没有找到有效的折线数据")
@@ -651,6 +661,7 @@ def _convert_standard_format(npz_data, token, config):
     """
     # 获取字段映射配置
     field_mapping = config.get('field_mapping', {})
+    
     
     # 获取npz文件中的键
     npz_keys = list(npz_data.keys())

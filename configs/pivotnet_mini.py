@@ -43,9 +43,10 @@ config = {
     
     # 类别映射 - 与MapTR保持一致
     'class_mapping': {
-        0: 'divider',        # 车道分隔线
-        1: 'ped_crossing',   # 人行横道
-        2: 'boundary'        # 道路边界
+        0: 'None',
+        1: 'divider',        # 车道分隔线
+        2: 'ped_crossing',   # 人行横道
+        3: 'boundary'        # 道路边界
     },
     
     # 坐标变换配置
