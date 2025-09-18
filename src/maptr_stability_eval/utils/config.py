@@ -15,11 +15,15 @@ def parse_args():
         args: 解析后的参数对象
     """
     parser = argparse.ArgumentParser(
-        description='MapTR稳定性评估工具 - 评估pkl格式预测结果的稳定性')
+        description='MapTR稳定性评估工具 - 评估pkl或npz格式预测结果的稳定性')
+    
+    # 数据格式选择
+    parser.add_argument('--data-format', type=str, choices=['pkl', 'npz'], default='pkl',
+                       help='数据格式：pkl（单个文件）或npz（文件夹） (默认: pkl)')
     
     # 必需参数
     parser.add_argument('--prediction-file', type=str, required=True,
-                       help='pkl格式的预测结果文件路径')
+                       help='预测结果文件路径（pkl文件或npz文件夹）')
     parser.add_argument('--config', type=str, required=True,
                        help='配置文件路径，定义输入文件字段格式')
     

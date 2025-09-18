@@ -14,6 +14,7 @@ from ..geometry import (
     polyline_iou,
     transform_points_between_frames
 )
+from scipy.optimize import linear_sum_assignment
 
 
 def compute_presence_consistency(cur_scores, pre_scores, threshold=0.01):
@@ -59,6 +60,13 @@ def get_localization_variations(cur_pred, pre_pred,
     Returns:
         iou: 两帧预测的IoU值
     """
+    # print("========================")
+    # print(x_range, y_range)
+    # 输入验证：如果当前预测为空，直接返回-1（特殊标记）
+    # if len(cur_pred) == 0:
+    #     print("【warning】当前预测为空，返回-1")
+    #     return -1
+    
     # 如果ego_rotation为None，使用默认值（无旋转）
     # if cur_ego_rotation is None:
     #     from pyquaternion import Quaternion
@@ -77,6 +85,9 @@ def get_localization_variations(cur_pred, pre_pred,
     )
     
     # 筛选当前帧作用范围内的点
+    # x_range = (-15, 15)
+    # y_range = (-30, 30)
+    # print(pre_pred)
     valid_mask = (
         (pre_pred_in_cur_frame[:, 0] >= x_range[0]) &
         (pre_pred_in_cur_frame[:, 0] <= x_range[1]) &
@@ -89,6 +100,7 @@ def get_localization_variations(cur_pred, pre_pred,
     
     # 计算当前预测和先前预测之间的IoU
     iou = polyline_iou(cur_pred, filtered_pre_pred, x_samples)
+    # iou = polyline_iou(cur_pred, pre_pred_in_cur_frame, x_samples)
     # print("iou:", iou)
     return iou
 
@@ -220,22 +232,109 @@ def eval_maptr_stability_index(cur_det_annos, pre_det_annos, cur_gt_annos, pre_g
         #     print(f"当前帧GT类型: {cur_gt_anno.get('types', [])[:5]}...")
         #     print(f"前一帧GT类型: {pre_gt_anno.get('types', [])[:5]}...")
 
-        # 获取匹配的GT元素 (基于instance_id)
-        cur_gt_ids = cur_gt_anno['instance_ids']
-        pre_gt_ids = pre_gt_anno['instance_ids']
-        
-        # if idx < 3:
-        #     print(f"当前帧GT instance_ids: {cur_gt_ids[:5]}...")
-        #     print(f"前一帧GT instance_ids: {pre_gt_ids[:5]}...")
-        
-        if len(cur_gt_ids) == 0 or len(pre_gt_ids) == 0:
+        # 获取匹配的GT元素
+        use_proj_iou = bool(cur_gt_anno.get('_npz_project_iou_matching', False))
+        if not use_proj_iou:
+            # 基于instance_id（默认）
+            cur_gt_ids = cur_gt_anno['instance_ids']
+            pre_gt_ids = pre_gt_anno['instance_ids']
+            if len(cur_gt_ids) == 0 or len(pre_gt_ids) == 0:
+                if idx < 3:
+                    print(f"跳过第 {idx+1} 对数据：GT instance_ids为空")
+                continue
+            cur_align_idx, pre_align_idx = np.nonzero(
+                cur_gt_ids[:, None] == pre_gt_ids[None, :])
+        else:
+            # 基于“将前一帧GT投影到当前帧后，按 IoU 进行匹配”的策略（仅NPZ流程启用）
+            # NPZ专用：不使用GT，直接对检测结果做跨帧匹配
+            cur_det_polylines = cur_det_anno['polylines']
+            cur_det_types = list(cur_det_anno['types'])
+            cur_det_scores = cur_det_anno.get('scores', np.ones(len(cur_det_polylines)))
+
+            pre_det_polylines = pre_det_anno['polylines']
+            pre_det_types = list(pre_det_anno['types'])
+            pre_det_scores = pre_det_anno.get('scores', np.ones(len(pre_det_polylines)))
+
+            if len(cur_det_polylines) == 0 or len(pre_det_polylines) == 0:
+                if idx < 3:
+                    print(f"跳过第 {idx+1} 对数据：检测为空（IoU匹配）")
+                continue
+
+            # 先将上一帧检测投影到当前帧坐标系
+            projected_pre_det_polys = [
+                transform_points_between_frames(
+                    poly,
+                    src_translation=pre_gt_anno['ego_translation'],
+                    src_rotation=pre_gt_anno['ego_rotation'],
+                    dst_translation=cur_gt_anno['ego_translation'],
+                    dst_rotation=cur_gt_anno['ego_rotation']
+                ) for poly in pre_det_polylines
+            ]
+
+            # 按类别分组并分别匹配
+            name_to_indices_cur = {}
+            name_to_indices_pre = {}
+            for i, t in enumerate(cur_det_types):
+                name_to_indices_cur.setdefault(t, []).append(i)
+            for j, t in enumerate(pre_det_types):
+                name_to_indices_pre.setdefault(t, []).append(j)
+
+            matched_cur_polys, matched_pre_polys = [], []
+            matched_cur_scores, matched_pre_scores = [], []
+            matched_types = []
+
+            for cname in set(cur_det_types):
+                cur_idx_list = name_to_indices_cur.get(cname, [])
+                pre_idx_list = name_to_indices_pre.get(cname, [])
+                if not cur_idx_list or not pre_idx_list:
+                    continue
+
+                iou_mat = np.zeros((len(cur_idx_list), len(pre_idx_list)), dtype=np.float32)
+                for ii, ci in enumerate(cur_idx_list):
+                    cur_poly = cur_det_polylines[ci]
+                    x_samples = poly_get_samples(cur_poly, num_samples=100)
+                    for jj, pj in enumerate(pre_idx_list):
+                        pre_proj_poly = projected_pre_det_polys[pj]
+                        try:
+                            iou_mat[ii, jj] = polyline_iou(cur_poly, pre_proj_poly, x_samples)
+                        except Exception:
+                            iou_mat[ii, jj] = 0.0
+
+                if iou_mat.size == 0:
+                    continue
+                row_ind, col_ind = linear_sum_assignment(-iou_mat)
+                for r, c in zip(row_ind, col_ind):
+                    ci = cur_idx_list[r]
+                    pj = pre_idx_list[c]
+                    matched_cur_polys.append(cur_det_polylines[ci])
+                    matched_pre_polys.append(pre_det_polylines[pj])
+                    matched_cur_scores.append(cur_det_scores[ci])
+                    matched_pre_scores.append(pre_det_scores[pj])
+                    matched_types.append(cname)
+
+            if len(matched_cur_polys) == 0:
+                if idx < 3:
+                    print(f"跳过第 {idx+1} 对数据：未产生任何匹配对（IoU匹配）")
+                continue
+
+            # 写入成对信息（长度保持一致），并复制ego信息到每个匹配项
+            paired_infos['cur_det_polylines'].extend(matched_cur_polys)
+            paired_infos['pre_det_polylines'].extend(matched_pre_polys)
+            paired_infos['cur_det_scores'].extend(matched_cur_scores)
+            paired_infos['pre_det_scores'].extend(matched_pre_scores)
+            paired_infos['gt_types'].extend(matched_types)
+
+            M = len(matched_cur_polys)
+            paired_infos['cur_ego_translation'].extend([cur_gt_anno['ego_translation']] * M)
+            paired_infos['cur_ego_rotation'].extend([cur_gt_anno['ego_rotation']] * M)
+            paired_infos['pre_ego_translation'].extend([pre_gt_anno['ego_translation']] * M)
+            paired_infos['pre_ego_rotation'].extend([pre_gt_anno['ego_rotation']] * M)
+
+            valid_pairs += 1
             if idx < 3:
-                print(f"跳过第 {idx+1} 对数据：GT instance_ids为空")
+                print(f"匹配的instance数量(检测-检测): {M}")
+            # NPZ路径完成，跳过GT对齐流程
             continue
-            
-        # 匹配相同instance的元素
-        cur_align_idx, pre_align_idx = np.nonzero(
-            cur_gt_ids[:, None] == pre_gt_ids[None, :])
         
         if idx < 3:
             print(f"匹配的instance数量: {len(cur_align_idx)}")
@@ -261,13 +360,20 @@ def eval_maptr_stability_index(cur_det_annos, pre_det_annos, cur_gt_annos, pre_g
         
         # 对齐检测和GT（使用 MapTR 的分配器）
         from .alignment import align_det_and_gt_by_maptr_assigner
-        
+
+        # print("+++++++++++++++++++++++++debug+++++++++++++++++++++++++")
+        # print(cur_det_polylines[0].shape)
+        # print(cur_det_polylines[0])
+        # print(cur_gt_polylines[0])
         cur_aligned_polylines, cur_aligned_scores = align_det_and_gt_by_maptr_assigner(
             cur_det_polylines, cur_det_types, 
             cur_gt_polylines, gt_types, class_names, 
             pc_range=[-15.0, -30.0, -2.0, 15.0, 30.0, 2.0],
             # pc_range=[-25.0, -25.0, -5.0, 25.0, 25.0, 5.0], 
             det_scores=cur_det_scores)
+        # print(cur_aligned_polylines[0].shape)
+        # print(cur_aligned_polylines[0])
+        # print("+++++++++++++++++++++++++debug+++++++++++++++++++++++++")
         
         pre_aligned_polylines, pre_aligned_scores = align_det_and_gt_by_maptr_assigner(
             pre_det_polylines, pre_det_types, 
@@ -275,6 +381,14 @@ def eval_maptr_stability_index(cur_det_annos, pre_det_annos, cur_gt_annos, pre_g
             pc_range=[-15.0, -30.0, -2.0, 15.0, 30.0, 2.0], 
             # pc_range=[-25.0, -25.0, -5.0, 25.0, 25.0, 5.0],
             det_scores=pre_det_scores)
+
+        # print("++++++++++++++++++++++++")
+        # print("GT")
+        # print(cur_gt_polylines, pre_gt_polylines)
+        # print("DET")
+        # print(cur_det_polylines, pre_det_polylines)
+        # print("ALIGNED")
+        # print(cur_aligned_polylines, pre_aligned_polylines)
         
         # 存储配对信息
         paired_infos['cur_gt_polylines'].extend(cur_gt_polylines)

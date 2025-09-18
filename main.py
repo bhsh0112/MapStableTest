@@ -17,7 +17,12 @@ src_path = Path(__file__).parent / "src"
 sys.path.insert(0, str(src_path))
 
 from maptr_stability_eval.utils import parse_args
-from maptr_stability_eval.data_parser import load_prediction_results, _safe_dump_outputs
+from maptr_stability_eval.data_parser import (
+    load_prediction_results, 
+    load_npz_prediction_results,
+    get_npz_file_info,
+    _safe_dump_outputs
+)
 from maptr_stability_eval.stability import eval_maptr_stability_index, print_stability_index_results
 
 
@@ -40,6 +45,7 @@ def main():
 
     print("MapTR稳定性评估工具")
     print("=" * 50)
+    print(f"数据格式: {args.data_format}")
     print(f"预测结果文件: {args.prediction_file}")
     print(f"配置文件: {args.config}")
     print(f"输出目录: {args.output_dir}")
@@ -55,8 +61,22 @@ def main():
 
     # 加载预测结果
     print("\n加载预测结果...")
-    prediction_results = load_prediction_results(args.prediction_file, config)
-    print(f"✓ 预测结果加载成功，共 {len(prediction_results)} 个样本")
+    if args.data_format == 'pkl':
+        prediction_results = load_prediction_results(args.prediction_file, config)
+        print(f"✓ PKL预测结果加载成功，共 {len(prediction_results)} 个样本")
+    elif args.data_format == 'npz':
+        # 显示npz文件信息
+        npz_info = get_npz_file_info(args.prediction_file)
+        if 'error' in npz_info:
+            print(f"Warning: {npz_info['error']}")
+        else:
+            print(f"NPZ文件信息: {npz_info['total_files']} 个文件")
+            print(f"样本键: {npz_info['sample_keys']}")
+        
+        prediction_results = load_npz_prediction_results(args.prediction_file, config)
+        print(f"✓ NPZ预测结果加载成功，共 {len(prediction_results)} 个样本")
+    else:
+        raise ValueError(f"不支持的数据格式: {args.data_format}")
     # print(prediction_results[0])
 
     # 初始化NuScenes（从配置文件或命令行参数）
@@ -83,7 +103,8 @@ def main():
         pred_rotate_deg=getattr(args, 'pred_rotate_deg', 0.0),
         pred_swap_xy=getattr(args, 'pred_swap_xy', False),
         pred_flip_x=getattr(args, 'pred_flip_x', False),
-        pred_flip_y=getattr(args, 'pred_flip_y', False)
+        pred_flip_y=getattr(args, 'pred_flip_y', False),
+        data_format=args.data_format
     )
     print(f"✓ 数据解析完成")
     # print(parsed_data[2])
@@ -114,6 +135,7 @@ def main():
         
         with open(log_file, 'w', encoding='utf-8') as f:
             f.write(f"MapTR稳定性评估结果\n")
+            f.write(f"数据格式: {args.data_format}\n")
             f.write(f"预测文件: {args.prediction_file}\n")
             f.write(f"配置文件: {args.config}\n")
             f.write(f"评估时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -143,25 +165,31 @@ def load_config(config_path):
 
 def parse_prediction_data(prediction_results, config, interval, nusc=None, 
                          pred_rotate_deg=0.0, pred_swap_xy=False, 
-                         pred_flip_x=False, pred_flip_y=False):
+                         pred_flip_x=False, pred_flip_y=False, data_format='pkl'):
     """解析预测数据为稳定性评估格式"""
-    from maptr_stability_eval.data_parser import parse_prediction_for_stability
-    from maptr_stability_eval.data_parser import parse_maptr_data
+    from maptr_stability_eval.data_parser import parse_prediction_for_stability, parse_maptr_data
+    from maptr_stability_eval.data_parser import parse_npz_prediction_for_stability
     
-    # return parse_prediction_for_stability(
-    #     prediction_results, config, interval, nusc,
-    #     pred_rotate_deg=pred_rotate_deg,
-    #     pred_swap_xy=pred_swap_xy,
-    #     pred_flip_x=pred_flip_x,
-    #     pred_flip_y=pred_flip_y
-    # )
-    return parse_maptr_data(
-        nusc, prediction_results, interval,
-        pred_rotate_deg=pred_rotate_deg,
-        pred_swap_xy=pred_swap_xy,
-        pred_flip_x=pred_flip_x,
-        pred_flip_y=pred_flip_y
-    )
+    if data_format == 'pkl':
+        # 使用pkl解析逻辑
+        return parse_maptr_data(
+            nusc, prediction_results, interval,
+            pred_rotate_deg=pred_rotate_deg,
+            pred_swap_xy=pred_swap_xy,
+            pred_flip_x=pred_flip_x,
+            pred_flip_y=pred_flip_y
+        )
+    elif data_format == 'npz':
+        # 使用npz解析逻辑
+        return parse_npz_prediction_for_stability(
+            prediction_results, config, interval, nusc,
+            pred_rotate_deg=pred_rotate_deg,
+            pred_swap_xy=pred_swap_xy,
+            pred_flip_x=pred_flip_x,
+            pred_flip_y=pred_flip_y
+        )
+    else:
+        raise ValueError(f"不支持的数据格式: {data_format}")
 
 
 if __name__ == '__main__':

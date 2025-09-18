@@ -1,10 +1,13 @@
 # MapTR稳定性评估工具包
 
-一个专门用于评估MapTR模型在连续帧间稳定性表现的工具包。该工具直接加载pkl格式的预测结果进行评估，无需进行地图推测过程。
+一个专门用于评估MapTR模型在连续帧间稳定性表现的工具包。该工具支持加载pkl格式和npz格式的预测结果进行评估，无需进行地图推测过程。
 
 ## 功能特性
 
-- **直接评估**: 直接加载pkl格式的预测结果，无需重新运行模型
+- **多格式支持**: 支持pkl格式（单个文件）和npz格式（文件夹）的预测结果
+- **模型兼容**: 兼容MapTR、PivotNet等多种地图构建模型的输出格式
+- **NPZ文件支持**: 专门支持PivotNet等模型输出的npz文件格式，每个npz文件对应一个token
+- **直接评估**: 直接加载预测结果进行评估，无需重新运行模型
 - **灵活配置**: 通过配置文件定义输入文件字段格式，支持多种数据格式
 - **稳定性指标**: 提供在场一致性、位置稳定性、形状稳定性等核心指标
 - **几何计算**: 包含折线处理、坐标变换、IoU计算等几何功能
@@ -28,14 +31,15 @@ maptr_stability_eval/
 │   ├── data_parser/                   # 数据解析模块
 │   │   ├── __init__.py
 │   │   ├── pkl_loader.py              # PKL文件加载
+│   │   ├── npz_loader.py              # NPZ文件加载
 │   │   └── utils.py                   # 数据解析工具
 │   ├── utils/                         # 通用工具模块
 │   │   ├── __init__.py
 │   │   └── config.py                  # 配置和参数解析
 │   └── __init__.py
 ├── configs/                           # 配置文件
-│   ├── example_config.py              # 示例配置
-│   └── maptr_config.py                # MapTR标准配置
+│   ├── maptr.py                       # MapTR标准配置
+│   └── pivotnet.py                    # PivotNet配置
 ├── tests/                             # 测试文件
 ├── examples/                          # 使用示例
 ├── main.py                            # 主程序入口
@@ -74,16 +78,28 @@ pip install -e .
 
 ### 基本用法
 
+#### PKL格式（单个文件）
 ```bash
 python main.py \
+    --data-format pkl \
     --prediction-file results.pkl \
-    --config configs/example_config.py \
+    --config configs/maptr.py \
+    --output-dir outputs
+```
+
+#### NPZ格式（文件夹）
+```bash
+python main.py \
+    --data-format npz \
+    --prediction-file npz_folder/ \
+    --config configs/pivotnet.py \
     --output-dir outputs
 ```
 
 ### 主要参数
 
-- `--prediction-file`: pkl格式的预测结果文件路径（必需）
+- `--data-format`: 数据格式，pkl（单个文件）或npz（文件夹）（默认: pkl）
+- `--prediction-file`: 预测结果文件路径（pkl文件或npz文件夹）（必需）
 - `--config`: 配置文件路径，定义输入文件字段格式（必需）
 - `--output-dir`: 输出结果目录（默认: outputs）
 - `--stability-classes`: 评估的类别（默认: divider ped_crossing boundary）
@@ -94,8 +110,19 @@ python main.py \
 
 ```bash
 python main.py \
+    --data-format pkl \
     --prediction-file maptr_results.pkl \
-    --config configs/maptr_config.py \
+    --config configs/maptr.py \
+    --output-dir outputs
+```
+
+### 使用PivotNet配置
+
+```bash
+python main.py \
+    --data-format npz \
+    --prediction-file pivotnet_results/ \
+    --config configs/pivotnet.py \
     --output-dir outputs
 ```
 
@@ -103,8 +130,9 @@ python main.py \
 
 ```bash
 python main.py \
+    --data-format pkl \
     --prediction-file results.pkl \
-    --config configs/example_config.py \
+    --config configs/maptr.py \
     --stability-classes divider boundary \
     --stability-interval 3 \
     --localization-weight 0.7 \
@@ -145,19 +173,44 @@ config = {
 ```python
 [
     {
-        'polylines': [
-            np.array([[0, 0], [1, 1], [2, 0]]),  # 第一条折线
-            np.array([[0, 1], [1, 2], [2, 1]])   # 第二条折线
-        ],
-        'types': ['divider', 'boundary'],
-        'scores': [0.8, 0.9],
-        'sample_idx': 0,
-        'timestamp': 1000,
-        'instance_ids': ['divider_1', 'boundary_1'],
-        'scene_token': 'scene_001'
+        'pts_3d': torch.Tensor([[[0, 0], [1, 1], [2, 0]], [[0, 1], [1, 2], [2, 1]]]),  # 折线数据
+        'labels_3d': torch.Tensor([0, 2]),  # 类别标签: 0=divider, 1=ped_crossing, 2=boundary
+        'scores_3d': torch.Tensor([0.8, 0.9]),  # 预测分数
+        'sample_idx': 'token_001'  # 样本token
     },
     ...
 ]
+```
+
+### NPZ文件格式
+
+每个npz文件对应一个token，文件夹中包含多个npz文件：
+
+```
+npz_folder/
+├── token1.npz
+├── token2.npz
+├── token3.npz
+└── ...
+```
+
+每个npz文件内容：
+
+```python
+# 保存数据
+import numpy as np
+
+pts_3d = np.array([
+    [[0, 0], [1, 1], [2, 0]],  # 第一条折线
+    [[0, 1], [1, 2], [2, 1]]   # 第二条折线
+])
+labels_3d = np.array([0, 2])  # 类别标签
+scores_3d = np.array([0.8, 0.9])  # 预测分数
+
+np.savez('token1.npz', 
+         pts_3d=pts_3d,
+         labels_3d=labels_3d,
+         scores_3d=scores_3d)
 ```
 
 ## 稳定性指标
@@ -247,12 +300,22 @@ config = {
 
 ## 测试
 
-运行测试：
+### 运行NPZ加载器测试
+```bash
+python test_npz_loader.py
+```
+
+### 查看使用示例
+```bash
+python example_usage.py
+```
+
+### 运行单元测试
 ```bash
 pytest tests/
 ```
 
-运行导入测试：
+### 运行导入测试
 ```bash
 python test_imports.py
 ```

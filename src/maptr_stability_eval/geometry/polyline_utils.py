@@ -18,14 +18,16 @@ def poly_get_samples(poly, num_samples=100):
     Returns:
         x_samples: x方向的等距采样点数组
     """
-    # if len(poly) == 0:
-    #     # 如果折线为空，返回默认范围
-    #     return np.linspace(-30, 30, num_samples)
+    if len(poly) == 0:
+        # 如果折线为空，返回默认范围
+        print("【warning】折线为空，返回默认范围")
+        return np.linspace(-30, 30, num_samples)
     
     x = [p[0] for p in poly]
-    # if len(x) == 0:
-    #     # 如果x坐标为空，返回默认范围
-    #     return np.linspace(-30, 30, num_samples)
+    if len(x) == 0:
+        # 如果x坐标为空，返回默认范围
+        print("【warning】x坐标为空，返回默认范围")
+        return np.linspace(-30, 30, num_samples)
     
     min_x, max_x = min(x), max(x)
     

@@ -64,6 +64,7 @@ def validate_prediction_format(prediction_results, config):
     
     # 检查第一个样本的字段
     sample = prediction_results[0]
+    
     if not isinstance(sample, dict):
         raise ValueError("每个预测结果必须是字典格式")
     

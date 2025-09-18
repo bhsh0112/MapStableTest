@@ -1,4 +1,4 @@
-# Byte-compiled / optimized / DLL files
+g Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -131,6 +131,7 @@ dmypy.json
 # 项目特定文件
 work_dir/
 outputs/
+output/
 results/
 *.pkl
 *.pickle
