@@ -336,5 +336,5 @@ MIT License
 ## 联系方式
 
 如有问题或建议，请联系：
-- 作者: Zhiqi Li
-- 邮箱: zhiqi.li@example.com
+- 作者: Hao Shan
+- 邮箱: bhsh0112@163.com
