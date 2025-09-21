@@ -37,7 +37,15 @@ def load_prediction_results(pkl_path, config):
         raise ValueError(f"无法加载pkl文件 {pkl_path}: {e}")
     
     print(f"✓ 成功加载 {len(prediction_results)} 个预测结果")
-    
+
+    # 允许配置提供后处理钩子（例如：将 sample_idx 规范为 NuScenes token 字符串）
+    try:
+        post_hook = config.get('post_load_hook', None) if isinstance(config, dict) else None
+        if callable(post_hook):
+            post_hook(prediction_results)
+    except Exception as e:
+        print(f"Warning: post_load_hook 执行失败: {e}")
+
     # 验证数据格式
     validate_prediction_format(prediction_results, config)
     
@@ -110,7 +118,8 @@ def parse_prediction_for_stability(prediction_results, config, interval=2, nusc=
     # 按场景分组 - 与test_stable.py完全一致
     scenes_collector = defaultdict(list)
     for pred_info in prediction_results:
-        sample_token = pred_info['sample_idx']
+        # 优先使用真实的 NuScenes sample_token（若存在），否则回退到 sample_idx
+        sample_token = pred_info.get('token') or pred_info.get('sample_idx')
         try:
             gt_sample = nusc.get('sample', sample_token)
             scene_token = gt_sample['scene_token']
@@ -369,10 +378,17 @@ def parse_maptr_data(nusc, pred_infos, interval=1,
     解析MapTR的预测数据和GT数据
     """
     scenes_collector = defaultdict(list)
+    import re
+    _hex32 = re.compile(r'^[0-9a-f]{32}$')
     for pred_info in pred_infos:
-        sample_token = pred_info['sample_idx']
-        # print("=======================")
-        # print(sample_token)
+        # 优先使用真实的 NuScenes sample_token
+        sample_token = pred_info.get('token')
+        if not (isinstance(sample_token, str) and _hex32.match(sample_token or '')):
+            # 回退到 sample_idx（若已由上游 hook 替换为 token 字符串亦可）
+            sample_token = pred_info.get('sample_idx')
+        # 强制为字符串
+        if not isinstance(sample_token, str):
+            sample_token = str(sample_token)
         try:
             gt_sample = nusc.get('sample', sample_token)
             scene_token = gt_sample['scene_token']
@@ -588,9 +604,19 @@ def parse_maptr_data(nusc, pred_infos, interval=1,
         # 构建预测注释
         scene_pred_annos = []
         for pred_info in scene_pred_infos:
-            # 解析预测结果
-            labels = pred_info['labels_3d'].cpu().numpy()
-            pts_3d = pred_info['pts_3d'].cpu().numpy()
+            # 解析预测结果，兼容 torch.Tensor 与 numpy.ndarray
+            labels_raw = pred_info.get('labels_3d')
+            pts_raw = pred_info.get('pts_3d')
+            if hasattr(labels_raw, 'cpu'):
+                labels = labels_raw.cpu().numpy()
+            else:
+                labels = np.asarray(labels_raw)
+            if hasattr(pts_raw, 'cpu'):
+                pts_3d = pts_raw.cpu().numpy()
+            else:
+                pts_3d = np.asarray(pts_raw, dtype=np.float32)
+            if isinstance(pts_3d, np.ndarray) and pts_3d.ndim == 2:
+                pts_3d = np.expand_dims(pts_3d, axis=0)
             
             # 映射类别ID到名称
             class_mapping = {
@@ -601,9 +627,13 @@ def parse_maptr_data(nusc, pred_infos, interval=1,
             pred_types = [class_mapping.get(label, 'unknown') for label in labels]
 
             if 'scores_3d' in pred_info:
-                scores = pred_info['scores_3d'].cpu().numpy().tolist()
+                scores_raw = pred_info['scores_3d']
+                if hasattr(scores_raw, 'cpu'):
+                    scores = scores_raw.cpu().numpy().tolist()
+                else:
+                    scores = np.asarray(scores_raw, dtype=np.float32).tolist()
             else:
-                scores = [1.0] * len(pts_3d)
+                scores = [1.0] * int(len(pts_3d))
             
             # 构建预测注释字典
             scene_pred_annos.append({
@@ -612,7 +642,8 @@ def parse_maptr_data(nusc, pred_infos, interval=1,
                               for pts in pts_3d],
                 'types': pred_types,
                 'scores': scores,  
-                'sample_idx': pred_info['sample_idx']
+                # 将 sample_idx 也对齐为真实的 sample_token，便于后续调试/可视化一致
+                'sample_idx': (pred_info.get('token') if isinstance(pred_info.get('token'), str) and _hex32.match(pred_info.get('token') or '') else str(pred_info.get('sample_idx')))
             })
 
         # print(scene_pred_annos)

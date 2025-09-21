@@ -55,6 +55,12 @@ config = {
         'flip_x': False,          # 是否翻转x轴
         'flip_y': False           # 是否翻转y轴
     },
+
+    # BEV 像素->米制转换半径
+    'bev': {
+        'radius_x_m': 15.0,
+        'radius_y_m': 30.0
+    },
     
     # 稳定性评估配置
     'stability_eval': {

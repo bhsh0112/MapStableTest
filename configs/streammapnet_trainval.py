@@ -1,71 +1,98 @@
 """
-StreamMapNet 稳定性评估配置文件
+StreamMapNet 稳定性评估配置文件（PKL）
 
-适用于 StreamMapNet 模型输出的 pkl 文件格式，与稳定性可视化/评估脚本保持一致。
-基于 /data2/file_swap/sh_space/map_test/srcs/StreamMapNet/tools/test_stable.py 的输出约定：
-支持包含 `labels`、`vectors`、`scores`、`token/sample_idx` 等字段的结果。
+适配 /map_test/results/StreamMapNet/streammapnet_r50_bevformer_30e.pkl 的结构：
+- 每个元素为 dict，至少包含: 'pts_3d'(N,P,2 ndarray), 'labels_3d'(N,), 'scores_3d'(N,),
+  'sample_idx'(int), 'token'(str)。
+
+该配置会在加载阶段将 sample_idx 统一为 NuScenes 的 sample_token 字符串，避免
+"Sample token not found" 的问题。
 """
 
 import numpy as np
 
+
+def _normalize_streammapnet_records(prediction_results):
+    """将每条记录的 sample_idx 规范为字符串 token。
+
+    - 若存在 'token' 且非空，则以 'token' 作为 sample_idx。
+    - 否则保留原 sample_idx（假定已为字符串）。
+    - 保证 pts_3d/labels_3d/scores_3d 为 numpy/torch 可被下游接受的形状。
+    """
+    for rec in prediction_results:
+        # 将 token 映射为 sample_idx（NuScenes sample_token）
+        if 'token' in rec and isinstance(rec['token'], str) and len(rec['token']) > 0:
+            rec['sample_idx'] = rec['token']
+        # 兜底处理：确保关键字段存在
+        if 'pts_3d' not in rec or 'labels_3d' not in rec:
+            continue
+        # 统一 numpy 类型，保持 (N,P,2)
+        pts = rec['pts_3d']
+        if isinstance(pts, np.ndarray):
+            # 确保为 float32
+            rec['pts_3d'] = pts.astype(np.float32, copy=False)
+        # 分数兜底
+        if 'scores_3d' not in rec or rec['scores_3d'] is None:
+            num = len(rec['labels_3d']) if hasattr(rec['labels_3d'], '__len__') else 0
+            rec['scores_3d'] = np.ones((num,), dtype=np.float32)
+
+
 # StreamMapNet 稳定性评估配置
 config = {
-    # 字段映射配置 - 基于 StreamMapNet 推理输出结构
+    # 自定义的预处理钩子：在加载完成后调用以规范 sample_idx 等
+    'post_load_hook': _normalize_streammapnet_records,
+
+    # 字段映射配置
     'field_mapping': {
-        # 必需字段
         'required_fields': [
-            'vectors',       # StreamMapNet 输出中的折线/矢量 (list[np.ndarray] 或等价结构)
-            'labels',        # 类别标签 (list[int] / np.ndarray[int])
-            'sample_idx'     # 样本索引 (str)，若无则使用 'token'
+            'pts_3d',        # 折线数据 (numpy.ndarray 或 torch.Tensor)
+            'labels_3d',     # 类别标签 (numpy.ndarray 或 torch.Tensor)
+            'scores_3d',     # 置信分数
+            'sample_idx'     # NuScenes sample_token（字符串）
         ],
-
-        # 字段名映射 - 兼容 StreamMapNet 输出
-        'polylines_field': 'vectors',          # 折线字段
-        'types_field': 'labels',               # 类别ID字段
-        'scores_field': 'scores',              # 预测分数字段（可选）
-        'instance_ids_field': 'instance_ids',  # 实例ID（可选，部分流程会从GT侧对齐获得）
-        'scene_id_field': 'scene_token',       # 场景ID（可选）
-        'timestamp_field': 'timestamp',        # 时间戳（可选）
-
-        # 位姿/标识（可选，通常从 NuScenes 元信息获取）
+        'polylines_field': 'pts_3d',
+        'types_field': 'labels_3d',
+        'scores_field': 'scores_3d',
+        'instance_ids_field': 'instance_ids',
+        'scene_id_field': 'scene_token',
+        'timestamp_field': 'timestamp',
         'ego_translation_field': 'ego_translation',
         'ego_rotation_field': 'ego_rotation',
         'token_field': 'token'
     },
 
-    # 类别映射 - 与稳定性可视化默认类别一致
+    # 类别映射（与评估内部一致）
     'class_mapping': {
-        0: 'divider',        # 车道分隔线
-        1: 'ped_crossing',   # 人行横道
-        2: 'boundary'        # 道路边界
+        0: 'divider',
+        1: 'ped_crossing',
+        2: 'boundary'
     },
 
-    # 坐标变换配置 - 对预测进行局部坐标调整（若需要，可在脚本参数中覆盖）
+    # 坐标系变换（按需在命令行通过 --pred-swap-xy / --pred-flip-y 控制）
     'coordinate_transform': {
-        'rotate_deg': 0.0,        # 旋转角度（度）
-        'swap_xy': False,         # 是否交换 x/y 坐标（StreamMapNet 若与 NuScenes 坐标不一致可改为 True）
-        'flip_x': False,          # 是否翻转 x 轴
-        'flip_y': False           # 是否翻转 y 轴
+        'rotate_deg': 0.0,
+        'swap_xy': False,
+        'flip_x': False,
+        'flip_y': False
     },
 
-    # 稳定性评估配置 - 与 StableMap/可视化脚本一致
+    # 稳定性评估参数
     'stability_eval': {
         'classes': ['divider', 'ped_crossing', 'boundary'],
-        'interval': 2,                       # 帧间隔
-        'localization_weight': 0.5,          # 位置稳定性权重
-        'detection_threshold': 0.3,          # 在场一致性检测阈值
-        'pc_range': [-25.0, -25.0, -5.0, 25.0, 25.0, 5.0],  # 点云/BEV范围
-        'num_sample_points': 50              # 折线重采样点数
+        'interval': 2,
+        'localization_weight': 0.5,
+        'pc_range': [-25.0, -25.0, -5.0, 25.0, 25.0, 5.0],
+        'num_sample_points': 50
     },
 
-    # NuScenes 数据集配置
+    # NuScenes 数据集
     'nuscenes': {
         'version': 'v1.0-trainval',
         'dataroot': 'data/nuscenes',
         'verbose': False
     },
 
-    # 数据验证配置
+    # 数据验证
     'validation': {
         'min_polylines_per_sample': 0,
         'max_polylines_per_sample': 1000,
@@ -75,40 +102,12 @@ config = {
         'score_range': [0.0, 1.0]
     },
 
-    # 数据处理配置 - 与稳定性评估实现中的默认值保持一致
+    # 数据处理
     'data_processing': {
-        'detection_threshold': 0.01,  # 与 test_stable.py 中的 DETECTION_THRESHOLD 对齐
-        'presence_threshold': 0.3,    # 在场一致性阈值
+        'detection_threshold': 0.01,
+        'presence_threshold': 0.3,
         'x_range': (-30, 30),
         'y_range': (-15, 15)
     }
 }
-
-# 数据格式说明（示例）
-"""
-StreamMapNet 推理输出 pkl 结构：
-
-每个 pkl 文件包含一个列表，列表中每个元素是一个字典，代表一个样本的预测结果。
-
-字段约定：
-- vectors: 折线集合，list[np.ndarray]，每个 ndarray 形状约为 (P_i, 2)
-- labels: 类别ID，list[int] 或 np.ndarray[int]，取值 {0: divider, 1: ped_crossing, 2: boundary}
-- scores: 预测分数，list[float] 或 np.ndarray[float]（可选，缺省按 1.0 处理）
-- sample_idx: 样本索引（str），若不存在可使用 token
-- token: NuScenes sample token（可选）
-- scene_token / timestamp / ego_translation / ego_rotation: 可选，通常从 NuScenes 元数据获取
-
-示例：
-[
-    {
-        'vectors': [np.array([[x1, y1], [x2, y2], ...], dtype=float), ...],
-        'labels': np.array([2, 0, 0, ...], dtype=int),
-        'scores': np.array([0.71, 0.64, ...], dtype=float),  # 可选
-        'sample_idx': '30e55a3ec6184d8cb1944b39ba19d622',
-        'token': '30e55a3ec6184d8cb1944b39ba19d622'  # 可选
-    },
-    ...
-]
-"""
-
 

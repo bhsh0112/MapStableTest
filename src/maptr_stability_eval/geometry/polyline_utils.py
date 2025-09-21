@@ -5,6 +5,13 @@
 """
 
 import numpy as np
+import math
+
+try:
+    import torch
+    _TORCH_AVAILABLE = True
+except Exception:
+    _TORCH_AVAILABLE = False
 
 
 def poly_get_samples(poly, num_samples=100):
@@ -67,6 +74,91 @@ def polyline_iou(poly1, poly2, x_samples):
     iou = 1 - total_abs_diff / (len(x_samples) * 15.0)
     
     return max(0.0, min(1.0, iou))
+
+
+def _torch_linear_interp_monotonic(x: "torch.Tensor", xp: "torch.Tensor", fp: "torch.Tensor") -> "torch.Tensor":
+    """
+    在已按升序排序的 xp 上，对一维函数进行线性插值。
+    要求：xp 形状为 (N,), 严格单调非降；x 形状为 (M,)；fp 与 xp 对应。
+    边界外采用端点外推（与 numpy.interp 类似的策略）。
+    """
+    # 处理重复 xp：压缩为唯一值，fp 取相同 xp 的均值
+    unique_xp, inverse_idx = torch.unique_consecutive(xp, return_inverse=True)
+    if unique_xp.numel() != xp.numel():
+        # 对重复分组取均值
+        counts = torch.bincount(inverse_idx)
+        sums = torch.zeros_like(unique_xp)
+        sums.scatter_add_(0, inverse_idx, fp)
+        fp = sums / counts.clamp(min=1)
+        xp = unique_xp
+
+    # searchsorted 找到每个 x 的右侧段索引
+    idx = torch.searchsorted(xp, x, right=True)
+    # 左右端点裁剪
+    idx0 = (idx - 1).clamp(min=0)
+    idx1 = idx.clamp(max=xp.numel() - 1)
+
+    x0 = xp[idx0]
+    x1 = xp[idx1]
+    y0 = fp[idx0]
+    y1 = fp[idx1]
+
+    # 避免除零：当 x1==x0 时，采用端点 y 值
+    denom = (x1 - x0)
+    same = denom.abs() < 1e-12
+    t = torch.zeros_like(denom)
+    t[~same] = (x[~same] - x0[~same]) / denom[~same]
+    y = y0 + t * (y1 - y0)
+    # 对于 degenerate 段，直接用 y0（或 y1）
+    y[same] = y0[same]
+    return y
+
+
+def polyline_iou_torch(poly1, poly2, x_samples, device: str = None):
+    """
+    使用 PyTorch 对两条折线的采样差进行计算，并返回与 polyline_iou 等价的 IoU 指标。
+    当 Torch 不可用或输入不合法时回退到 numpy 版本。
+    """
+    if not _TORCH_AVAILABLE:
+        return polyline_iou(poly1, poly2, x_samples)
+    try:
+        dev = torch.device(device) if device else (torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'))
+
+        # 空折线处理
+        if poly1 is None or len(poly1) == 0 or poly2 is None or len(poly2) == 0:
+            return -1.0
+
+        p1 = torch.as_tensor(poly1, dtype=torch.float32, device=dev)
+        p2 = torch.as_tensor(poly2, dtype=torch.float32, device=dev)
+        xs = torch.as_tensor(x_samples, dtype=torch.float32, device=dev)
+
+        # 若 x 不是严格单调，按 x 排序（与 numpy 版本近似，可能与原实现略有差异）
+        def prep(poly: "torch.Tensor"):
+            if poly.ndim != 2 or poly.shape[1] < 2:
+                return None
+            xp = poly[:, 0]
+            fp = poly[:, 1]
+            # 排序
+            sort_idx = torch.argsort(xp)
+            xp_sorted = xp[sort_idx]
+            fp_sorted = fp[sort_idx]
+            return xp_sorted, fp_sorted
+
+        p1_x, p1_y = prep(p1)
+        p2_x, p2_y = prep(p2)
+        if p1_x is None or p2_x is None:
+            return polyline_iou(poly1, poly2, x_samples)
+
+        y1 = _torch_linear_interp_monotonic(xs, p1_x, p1_y)
+        y2 = _torch_linear_interp_monotonic(xs, p2_x, p2_y)
+        total_abs_diff = torch.mean(torch.abs(y1 - y2))  # 等价于 sum/len
+        iou = 1.0 - (total_abs_diff / 15.0)
+        # 限幅到[0,1]
+        iou = torch.clamp(iou, 0.0, 1.0)
+        return float(iou.detach().cpu().item())
+    except Exception:
+        # 任意异常回退到 numpy 实现，保证稳健
+        return polyline_iou(poly1, poly2, x_samples)
 
 
 def interpolate_polyline(poly, x_samples):

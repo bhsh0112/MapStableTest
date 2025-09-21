@@ -143,7 +143,7 @@ def align_det_and_gt_by_maptr_assigner(det_polylines, det_types, gt_polylines, g
     ], axis=0).astype(np.float32)
 
     # torch 张量
-    device = torch.device('cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     bbox_pred = torch.from_numpy(pred_bbox_cxcywh_norm).to(device)
     cls_pred = torch.from_numpy(pred_logits).to(device)
     pts_pred = torch.from_numpy(pred_pts_norm).to(device)  # 注意：与训练一致，pred传[0,1]

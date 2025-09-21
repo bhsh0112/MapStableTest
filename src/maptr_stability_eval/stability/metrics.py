@@ -100,6 +100,7 @@ def get_localization_variations(cur_pred, pre_pred,
     
     # 计算当前预测和先前预测之间的IoU
     iou = polyline_iou(cur_pred, filtered_pre_pred, x_samples)
+    # print(pre_pred_in_cur_frame)
     # iou = polyline_iou(cur_pred, pre_pred_in_cur_frame, x_samples)
     # print("iou:", iou)
     return iou
