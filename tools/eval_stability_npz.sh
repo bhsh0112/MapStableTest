@@ -5,7 +5,7 @@
 
 # 设置默认参数
 CONFIG=${1:-"configs/default_config.py"}
-PREDICTION_FILE=${2:-""}
+PREDICTION_DIR=${2:-""}
 OUTPUT_DIR=${3:-"outputs/stability_eval"}
 DATA_ROOT=${4:-"/data/nuscenes"}
 NUSC_VERSION=${5:-"v1.0-trainval"}
@@ -14,16 +14,16 @@ STABILITY_INTERVAL=${7:-2}
 LOCALIZATION_WEIGHT=${8:-0.5}
 
 # 检查必需参数
-if [ -z "$PREDICTION_FILE" ]; then
-    echo "错误: 必须指定预测结果文件"
-    echo "用法: $0 <CONFIG> <PREDICTION_FILE> [OUTPUT_DIR] [DATA_ROOT] [NUSC_VERSION] [STABILITY_CLASSES] [STABILITY_INTERVAL] [LOCALIZATION_WEIGHT]"
-    echo "示例: $0 configs/default_config.py results/pred.npz outputs/eval /data/nuscenes v1.0-trainval 'divider,ped_crossing,boundary' 1 0.5"
+if [ -z "$PREDICTION_DIR" ]; then
+    echo "错误: 必须指定预测结果目录（包含若干 .npz 文件）"
+    echo "用法: $0 <CONFIG> <PREDICTION_DIR> [OUTPUT_DIR] [DATA_ROOT] [NUSC_VERSION] [STABILITY_CLASSES] [STABILITY_INTERVAL] [LOCALIZATION_WEIGHT]"
+    echo "示例: $0 configs/default_config.py results/npz_dir outputs/eval /data/nuscenes v1.0-trainval 'divider,ped_crossing,boundary' 1 0.5"
     exit 1
 fi
 
-# 检查文件是否存在
-if [ ! -f "$PREDICTION_FILE" ]; then
-    echo "错误: 预测结果文件不存在: $PREDICTION_FILE"
+# 检查目录是否存在
+if [ ! -d "$PREDICTION_DIR" ]; then
+    echo "错误: 预测结果目录不存在: $PREDICTION_DIR"
     exit 1
 fi
 
@@ -35,7 +35,7 @@ fi
 echo "MapTR稳定性评估 - NPZ格式"
 echo "================================"
 echo "配置文件: $CONFIG"
-echo "预测文件: $PREDICTION_FILE"
+echo "预测目录: $PREDICTION_DIR"
 echo "输出目录: $OUTPUT_DIR"
 echo "数据根目录: $DATA_ROOT"
 echo "NuScenes版本: $NUSC_VERSION"
@@ -51,14 +51,11 @@ PYTHONPATH="$(dirname $0)/..":$PYTHONPATH
 python3 main.py \
     --data-format npz \
     --config "$CONFIG" \
-    --prediction-file "$PREDICTION_FILE" \
+    --prediction-file "$PREDICTION_DIR" \
     --output-dir "$OUTPUT_DIR" \
-    --data-root "$DATA_ROOT" \
-    --nusc-version "$NUSC_VERSION" \
-    --stability-classes $STABILITY_CLASSES \
     --stability-interval $STABILITY_INTERVAL \
     --localization-weight $LOCALIZATION_WEIGHT \
     --pred-swap-xy \
-    --pred-swap-y
+    --pred-flip-y
 
 echo "NPZ稳定性评估完成！"

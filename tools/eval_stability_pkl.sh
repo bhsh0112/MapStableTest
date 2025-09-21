@@ -7,7 +7,7 @@
 CONFIG=${1:-"configs/default_config.py"}
 PREDICTION_FILE=${2:-""}
 OUTPUT_DIR=${3:-"outputs/stability_eval"}
-DATA_ROOT=${4:-"/data/nuscenes"}
+DATA_ROOT=${4:-"./data/nuscenes"}
 NUSC_VERSION=${5:-"v1.0-trainval"}
 STABILITY_CLASSES=${6:-"divider,ped_crossing,boundary"}
 STABILITY_INTERVAL=${7:-2}
@@ -49,17 +49,14 @@ echo "================================"
 PYTHONPATH="$(dirname $0)/..":$PYTHONPATH
 
 # 执行稳定性评估
-python3 main.py \
+python main.py \
     --data-format pkl \
     --config "$CONFIG" \
     --prediction-file "$PREDICTION_FILE" \
     --output-dir "$OUTPUT_DIR" \
-    --data-root "$DATA_ROOT" \
-    --nusc-version "$NUSC_VERSION" \
-    --stability-classes $STABILITY_CLASSES \
     --stability-interval $STABILITY_INTERVAL \
     --localization-weight $LOCALIZATION_WEIGHT \
     --pred-swap-xy \
-    --pred-swap-y
+    --pred-flip-y
 
 echo "PKL稳定性评估完成！"
