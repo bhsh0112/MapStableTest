@@ -22,6 +22,8 @@ import numpy as np
 
 # BeMapNet 稳定性评估配置
 config = {
+    'assume_bev_pixels': True,
+
     # 字段映射配置 - 基于 BeMapNet 实际输出结构
     'field_mapping': {
         # 必需字段（标准化后用于评估）
@@ -71,6 +73,14 @@ config = {
         'swap_xy': False,
         'flip_x': False,
         'flip_y': False
+    },
+
+    'bev': {
+        'size': (200, 400),           # BEV分辨率 (W,H)
+        'radius_x_m': 30.0,           # 半径x（常见：50m）
+        'radius_y_m': 15.0,           # 半径y（常见：25m）
+        'assume_bev_pixels': True,    # 强制视为BEV像素（绕过启发式）
+        'pixel_detect_ratio': 0.0     # 0 表示启发式恒通过（双保险）
     },
 
     # 稳定性评估配置

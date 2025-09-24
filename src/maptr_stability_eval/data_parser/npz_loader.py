@@ -16,6 +16,80 @@ import torch
 from ..geometry import _apply_pred_local_adjust
 
 
+def _normalize_polyline_to_N2(poly):
+    """将多种折线表示规范为 (N, 2) 形状。
+
+    支持输入：
+    - (N, 2)
+    - (2, N) -> 转置
+    - [..., K]，K>=2 -> 取前两列并展开为 (N, 2)
+    - 一维长度为偶数的向量 -> 按 (-1, 2) 重塑
+    - 两向量形式 [xs, ys]（list/ndarray/object数组，且长度一致） -> stack 为 (N, 2)
+    返回 None 表示无法规范化。
+    """
+    try:
+        # 优先处理“两向量”形式
+        if isinstance(poly, (list, tuple)) and len(poly) == 2:
+            a0 = _to_numpy(poly[0])
+            a1 = _to_numpy(poly[1])
+            if a0 is not None and a1 is not None:
+                a0 = np.asarray(a0).reshape(-1)
+                a1 = np.asarray(a1).reshape(-1)
+                if a0.shape == a1.shape and a0.size >= 2:
+                    return np.stack([a0, a1], axis=1).astype(np.float32)
+
+        arr = _to_numpy(poly)
+        if arr is None:
+            arr = np.asarray(poly)
+
+        # 处理 object 数组的“两向量”情况
+        if isinstance(arr, np.ndarray) and arr.dtype == object and arr.ndim == 1 and arr.size == 2:
+            a0 = _to_numpy(arr[0])
+            a1 = _to_numpy(arr[1])
+            if a0 is not None and a1 is not None:
+                a0 = np.asarray(a0).reshape(-1)
+                a1 = np.asarray(a1).reshape(-1)
+                if a0.shape == a1.shape and a0.size >= 2:
+                    return np.stack([a0, a1], axis=1).astype(np.float32)
+
+        arr = np.asarray(arr)
+
+        # 一维向量：若长度为偶数且>=4，按点对重塑；否则仅取前两项
+        if arr.ndim == 1:
+            if arr.size >= 4 and (arr.size % 2 == 0):
+                return arr.astype(np.float32).reshape(-1, 2)
+            if arr.size >= 2:
+                return arr[:2].astype(np.float32).reshape(1, 2)
+            return None
+
+        # 二维数组
+        if arr.ndim == 2:
+            h, w = int(arr.shape[0]), int(arr.shape[1])
+            if w == 2:
+                return arr.astype(np.float32)
+            if h == 2 and w > 2:
+                return arr.T.astype(np.float32)
+            if w > 2:
+                return arr[:, :2].astype(np.float32)
+            # 尝试转置后是否满足 (N,2)
+            arr_t = arr.T
+            if arr_t.shape[1] == 2:
+                return arr_t.astype(np.float32)
+            return None
+
+        # 高维：展平最后一维并取前两列
+        if arr.ndim >= 3:
+            last = int(arr.shape[-1])
+            if last >= 2:
+                flat = arr.reshape(-1, last)
+                return flat[:, :2].astype(np.float32)
+            return None
+
+        return None
+    except Exception:
+        return None
+
+
 def _clean_and_pad_polylines(polylines_list, *, token: str = None, debug: bool = False, config: dict = None):
     """
     清洗并填充折线到统一长度（使用末点重复而非零填充）
@@ -34,13 +108,9 @@ def _clean_and_pad_polylines(polylines_list, *, token: str = None, debug: bool =
         if poly is None:
             removed_count += 1
             continue
-        pts = np.asarray(poly)
-        # 容忍 (N,3/4) 等多列，只取前两列
-        if pts.ndim == 1 and pts.size >= 2:
-            pts = np.asarray(pts[:2], dtype=np.float32).reshape(1, 2)
-        elif pts.ndim >= 2 and pts.shape[-1] >= 2:
-            pts = np.asarray(pts[..., :2], dtype=np.float32)
-        else:
+        # 统一规范到 (N, 2)
+        pts = _normalize_polyline_to_N2(poly)
+        if pts is None:
             removed_count += 1
             continue
         # 仅保留有限值点
@@ -126,7 +196,7 @@ def _to_python_str(value):
         return None
 
 
-def _detect_bev_pixel_coords(padded_pts_3d, width: int, height: int) -> bool:
+def _detect_bev_pixel_coords(padded_pts_3d, width: int, height: int, *, threshold: float = 0.8) -> bool:
     """简单启发式：若大部分点都在[0,width]x[0,height]范围内，则视为BEV像素坐标。"""
     try:
         pts = padded_pts_3d.reshape(-1, 2)
@@ -134,7 +204,7 @@ def _detect_bev_pixel_coords(padded_pts_3d, width: int, height: int) -> bool:
             return False
         inside = (pts[:, 0] >= 0) & (pts[:, 0] <= (width + 1)) & (pts[:, 1] >= 0) & (pts[:, 1] <= (height + 1))
         ratio = float(np.mean(inside))
-        return ratio >= 0.8
+        return ratio >= float(threshold)
     except Exception:
         return False
 
@@ -500,8 +570,29 @@ def _convert_pivotnet_format(npz_data, token, config):
         
         # 提取折线数据 (map字段)
         map_data = dt_res.get('map', [])
+        # 兼容 numpy object 数组
+        if isinstance(map_data, np.ndarray) and map_data.dtype == object:
+            map_data = list(map_data)
+
+        # 分数与标签：统一为一维
         confidence_level = dt_res.get('confidence_level', [])
         pred_label = dt_res.get('pred_label', [])
+        try:
+            confidence_level = _to_numpy(confidence_level)
+            if confidence_level is not None:
+                confidence_level = np.asarray(confidence_level).reshape(-1)
+            else:
+                confidence_level = []
+        except Exception:
+            pass
+        try:
+            pred_label = _to_numpy(pred_label)
+            if pred_label is not None:
+                pred_label = np.asarray(pred_label).reshape(-1)
+            else:
+                pred_label = []
+        except Exception:
+            pass
         
         # 过滤掉None值并提取有效的折线
         valid_polylines = []
@@ -514,7 +605,7 @@ def _convert_pivotnet_format(npz_data, token, config):
             # 标签映射（来自配置：0=None, 1=divider, 2=ped_crossing, 3=boundary）
             # 评测内部使用: 0=divider, 1=ped_crossing, 2=boundary
             mapped_label = None
-            if i < len(pred_label):
+            if isinstance(pred_label, (list, tuple, np.ndarray)) and i < len(pred_label):
                 raw_label = int(pred_label[i])
                 if raw_label == 1:
                     mapped_label = 0
@@ -533,8 +624,8 @@ def _convert_pivotnet_format(npz_data, token, config):
             valid_labels.append(mapped_label)
 
             # 使用confidence_level作为分数
-            if i < len(confidence_level):
-                score = confidence_level[i]
+            if isinstance(confidence_level, (list, tuple, np.ndarray)) and i < len(confidence_level):
+                score = float(confidence_level[i])
                 # -1 表示无效/未检测，置为 0.0 以便后续过滤
                 if score == -1:
                     score = 0.0
@@ -572,28 +663,40 @@ def _convert_pivotnet_format(npz_data, token, config):
                     # 常见为 (C, W, H) 或 (C, H, W)，取较大者为宽
                     s1, s2 = int(m.shape[1]), int(m.shape[2])
                     bev_W, bev_H = (max(s1, s2), min(s1, s2))
+                    # bev_W, bev_H = (min(s1, s2), max(s1, s2))
             # 允许从配置覆盖 BEV 尺寸
             bev_cfg = config.get('bev', {}) if isinstance(config, dict) else {}
             if bev_W is None or bev_H is None:
                 size = bev_cfg.get('size')
                 if isinstance(size, (list, tuple)) and len(size) == 2:
                     bev_W, bev_H = int(size[0]), int(size[1])
+            # print("=========================================bev_W, bev_H=============================")
+            # print(bev_W, bev_H)
             if bev_W is None or bev_H is None:
+                # print("=========================================faild=============================")
                 bev_W, bev_H = 400, 200
 
-            if _detect_bev_pixel_coords(padded_pts_3d, bev_W, bev_H):
-                # print("============================success===========================")
+            # 新增：配置强制视为BEV像素与判定阈值
+            force_bev = bool(bev_cfg.get('assume_bev_pixels', False)) or bool(config.get('assume_bev_pixels', False))
+            pixel_ratio = float(bev_cfg.get('pixel_detect_ratio', 0.8))
+            if bev_cfg.get('size', None) is not None:
+                bev_W, bev_H = bev_cfg.get('size')
+
+            if force_bev or _detect_bev_pixel_coords(padded_pts_3d, bev_W, bev_H, threshold=pixel_ratio):
                 radius_x_m = float(bev_cfg.get('radius_x_m', 50.0))
                 radius_y_m = bev_cfg.get('radius_y_m', None)
+                # print(radius_x_m, radius_y_m)
                 # print(padded_pts_3d)
                 
                 padded_pts_3d = _bev_pixels_to_ego_meters(padded_pts_3d, bev_W, bev_H, radius_x_m=radius_x_m, radius_y_m=radius_y_m)
-                
+                # print(padded_pts_3d)
                 # print(padded_pts_3d)
                 already_in_ego = True
                 # print("===============================end==========================")
         except Exception:
             pass
+
+        # print(padded_pts_3d)
 
         if not already_in_ego:
             # 将全局坐标转换为自车坐标
@@ -624,11 +727,14 @@ def _convert_pivotnet_format(npz_data, token, config):
             if flat_post.size:
                 print(f"[npz_loader][debug] token={token} post-transform range: x[{flat_post[:,0].min():.3f},{flat_post[:,0].max():.3f}], y[{flat_post[:,1].min():.3f},{flat_post[:,1].max():.3f}]")
 
+
+        # print(padded_pts_3d)
         # 自动朝向调整
         padded_pts_3d = _auto_adjust_orientation(padded_pts_3d, config, token=token)
 
         # 转换为torch.Tensor
         pts_3d_tensor = torch.from_numpy(padded_pts_3d.astype(np.float32))
+        # print(pts_3d_tensor)
         labels_3d_tensor = torch.from_numpy(labels_3d.astype(np.int64))
         scores_3d_tensor = torch.from_numpy(scores_3d.astype(np.float32))
         
@@ -740,7 +846,9 @@ def _convert_standard_format(npz_data, token, config):
         bev_cfg = config.get('bev', {}) if isinstance(config, dict) else {}
         size = bev_cfg.get('size', (400, 200))
         bev_W, bev_H = int(size[0]), int(size[1])
-        if _detect_bev_pixel_coords(padded_pts_3d, bev_W, bev_H):
+        force_bev = bool(bev_cfg.get('assume_bev_pixels', False)) or bool(config.get('assume_bev_pixels', False))
+        pixel_ratio = float(bev_cfg.get('pixel_detect_ratio', 0.8))
+        if force_bev or _detect_bev_pixel_coords(padded_pts_3d, bev_W, bev_H, threshold=pixel_ratio):
             radius_x_m = float(bev_cfg.get('radius_x_m', 50.0))
             radius_y_m = bev_cfg.get('radius_y_m', None)
             padded_pts_3d = _bev_pixels_to_ego_meters(padded_pts_3d, bev_W, bev_H, radius_x_m=radius_x_m, radius_y_m=radius_y_m)

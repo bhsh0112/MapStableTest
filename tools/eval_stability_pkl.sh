@@ -6,11 +6,12 @@
 # 设置默认参数
 CONFIG=${1:-"configs/default_config.py"}
 PREDICTION_FILE=${2:-""}
-OUTPUT_DIR=${3:-"outputs/stability_eval"}
-DATA_ROOT=${4:-"./data/nuscenes"}
-NUSC_VERSION=${5:-"v1.0-trainval"}
-STABILITY_CLASSES=${6:-"divider,ped_crossing,boundary"}
-STABILITY_INTERVAL=${7:-2}
+STABILITY_INTERVAL=${3:-2}
+OUTPUT_DIR=${4:-"outputs/stability_eval"}
+DATA_ROOT=${5:-"./data/nuscenes"}
+NUSC_VERSION=${6:-"v1.0-trainval"}
+STABILITY_CLASSES=${7:-"divider,ped_crossing,boundary"}
+
 LOCALIZATION_WEIGHT=${8:-0.5}
 
 

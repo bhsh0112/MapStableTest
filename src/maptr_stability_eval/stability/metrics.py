@@ -99,10 +99,21 @@ def get_localization_variations(cur_pred, pre_pred,
     x_samples = poly_get_samples(cur_pred, num_samples=100)
     
     # 计算当前预测和先前预测之间的IoU
+    # print("==============================")
+    # print(filtered_pre_pred)
+    # print(cur_pred)
+    # print("==============================")
     iou = polyline_iou(cur_pred, filtered_pre_pred, x_samples)
+    # print(len(filtered_pre_pred))
     # print(pre_pred_in_cur_frame)
     # iou = polyline_iou(cur_pred, pre_pred_in_cur_frame, x_samples)
     # print("iou:", iou)
+    # if iou == 0:
+    #     print("==============================")
+    #     print(filtered_pre_pred)
+    #     print(cur_pred)
+    #     print("==============================")
+    # print(len(x_samples))
     return iou
 
 
@@ -166,7 +177,7 @@ def get_shape_variations(cur_pred, prev_pred,
     )
     filtered_pre_pred = pre_pred_in_cur_frame[valid_mask]
 
-    final_prev_pred = pre_pred_in_cur_frame
+    final_prev_pred = filtered_pre_pred
     
     if len(cur_pred) < 3 or len(final_prev_pred) < 3:
         return 1

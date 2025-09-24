@@ -50,7 +50,8 @@ def poly_get_samples(poly, num_samples=100):
 
 def polyline_iou(poly1, poly2, x_samples):
     """
-    计算两条折线之间的IoU（基于x方向等距离采样）
+    计算两条折线之间的IoU（基于x方向等距离采样）。
+    优先使用GPU上的Torch实现，若不可用则回退到NumPy实现。
     
     Args:
         poly1, poly2: 折线点集，格式为[[x1,y1], [x2,y2], ...]
@@ -59,20 +60,26 @@ def polyline_iou(poly1, poly2, x_samples):
     Returns:
         iou: 两条折线的IoU值，范围[0,1]，特殊情况下返回-1
     """
-    # 特殊标记，做平均时不算
+    # Torch可用时优先走GPU路径（返回float）
+    # if _TORCH_AVAILABLE:
+    #     try:
+    #         return polyline_iou_torch(poly1, poly2, x_samples)
+    #     except Exception:
+    #         pass
+    
+    # 回退到原有的NumPy实现
     if len(poly1) == 0 or len(poly2) == 0:
         return -1
-    
-    # 对两条折线进行插值
     y1_samples = interpolate_polyline(poly1, x_samples)
     y2_samples = interpolate_polyline(poly2, x_samples)
-    
-    # 计算绝对差值和
     total_abs_diff = np.sum(np.abs(y1_samples - y2_samples))
-    
-    # 计算IoU (使用与原始函数相同的归一化因子)
+    # print("total_abs_diff:", total_abs_diff)
+    # print("len(x_samples):", len(x_samples))
+    # print("15.0:", 15.0)
     iou = 1 - total_abs_diff / (len(x_samples) * 15.0)
-    
+    # if iou<=0:
+    #     print(total_abs_diff)
+    #     print(np.abs(y1_samples - y2_samples))
     return max(0.0, min(1.0, iou))
 
 
