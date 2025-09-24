@@ -139,6 +139,30 @@ def _load_outputs(pred_path: str):
         return pickle.load(f)
 
 
+def _collect_pkl_files(path: str) -> List[str]:
+    """
+    /**
+     * @description 收集输入路径下的所有 pkl 文件；若为文件则仅返回该文件。
+     * @param {str} path 文件或目录路径
+     * @returns {string[]} pkl 文件绝对路径列表（按字典序排序）
+     */
+    """
+    if path is None:
+        return []
+    abs_path = os.path.abspath(path)
+    if os.path.isfile(abs_path) and abs_path.lower().endswith('.pkl'):
+        return [abs_path]
+    if os.path.isdir(abs_path):
+        pkl_list: List[str] = []
+        for root, _dirs, files in os.walk(abs_path):
+            for fn in files:
+                if fn.lower().endswith('.pkl'):
+                    pkl_list.append(os.path.join(root, fn))
+        pkl_list.sort()
+        return pkl_list
+    return []
+
+
 def _convert_gt_to_outputs_format(gt_data: dict):
     """
     /**
@@ -998,7 +1022,7 @@ def parse_args():
      */
     """
     parser = argparse.ArgumentParser('MapTR 连续帧稳定性可视化')
-    parser.add_argument('--pred', type=str, default=None, help='预测输出pkl路径 (test脚本 --out 保存)，不指定时可视化真值')
+    parser.add_argument('--pred', type=str, default=None, help='预测输出pkl路径或包含pkl的目录 (test脚本 --out 保存)，不指定时可视化真值')
     parser.add_argument('--data-root', type=str, required=True, help='NuScenes数据路径')
     parser.add_argument('--gt-path', type=str, default='data/nuscenes/nuscenes_map_infos_temporal_val.pkl', help='真值数据pkl路径')
     parser.add_argument('--nusc-version', type=str, default='v1.0-mini', help='NuScenes版本')
@@ -1034,211 +1058,219 @@ def main():
 
     timestamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
     
-    # 确定使用的数据路径和类型
-    if args.pred is not None:
-        data_path = args.pred
-        data_type = "预测"
-        pkl_name = args.pred.split('/')[-1].split('.')[0]
-    else:
-        data_path = args.gt_path
-        data_type = "真值"
-        pkl_name = "gt_" + args.gt_path.split('/')[-1].split('.')[0]
-    
-    base_out = os.path.join(args.out_dir, f'stable_vis_{pkl_name}/{args.scene_name}')
-    _ensure_dir(base_out)
-
-    print(f'加载 NuScenes 与{data_type}结果...')
+    # 初始化 NuScenes 一次复用
+    print('加载 NuScenes 元数据...')
     nusc = NuScenes(version=args.nusc_version, dataroot=args.data_root, verbose=False)
-    
-    # 加载数据
+
+    # 收集待处理的 pkl 列表（预测模式）；若未提供 --pred 则转为真值模式仅处理一次
     if args.pred is not None:
-        outputs = _load_outputs(args.pred)
-        print(f'加载预测结果: {args.pred}')
+        pkl_list = _collect_pkl_files(args.pred)
+        if len(pkl_list) == 0:
+            print(f"[warn] 未在输入中找到任何 pkl 文件: {args.pred}")
+            return
     else:
-        gt_data = _load_outputs(args.gt_path)
-        outputs = _convert_gt_to_outputs_format(gt_data)
-        print(f'加载真值结果: {args.gt_path}')
+        pkl_list = [None]  # 使用真值模式占位
 
-    print('整理场景序列...')
-    scene_to_frames = _collect_scene_sequences(nusc, outputs, score_thr=args.score_thr, class_filter=args.classes)
-    if len(scene_to_frames) == 0:
-        print(f'[warn] 没有可视化的场景/帧，请检查 {data_type}数据路径, --data-root 与类别过滤')
-        return
-
-    # 选择场景：优先 token -> name -> index -> 第一个
-    chosen_scene = None
-    if args.scene_token:
-        if args.scene_token in scene_to_frames:
-            chosen_scene = args.scene_token
+    for pkl_path in pkl_list:
+        # 确定当前任务的数据源与输出根目录
+        if pkl_path is not None:
+            data_type = "预测"
+            data_path = pkl_path
+            pkl_name = os.path.basename(pkl_path).split('.')[0]
         else:
-            print(f"[warn] 指定的 scene_token 不在{data_type}数据中: {args.scene_token}")
+            data_type = "真值"
+            data_path = args.gt_path
+            pkl_name = "gt_" + os.path.basename(args.gt_path).split('.')[0]
 
-    if chosen_scene is None and args.scene_name:
-        # 遍历NuScenes的scene表以匹配name到token
-        try:
-            for sc in nusc.scene:
-                if sc.get('name') == args.scene_name:
-                    maybe_token = sc.get('token')
+        base_out = os.path.join(args.out_dir, f'stable_vis_{pkl_name}/{args.scene_name}')
+        _ensure_dir(base_out)
+
+        print(f'加载 {data_type}结果: {data_path}')
+
+        # 加载数据
+        if data_type == "预测":
+            outputs = _load_outputs(data_path)
+        else:
+            gt_data = _load_outputs(data_path)
+            outputs = _convert_gt_to_outputs_format(gt_data)
+
+        print('整理场景序列...')
+        scene_to_frames = _collect_scene_sequences(nusc, outputs, score_thr=args.score_thr, class_filter=args.classes)
+        if len(scene_to_frames) == 0:
+            print(f'[warn] 没有可视化的场景/帧，请检查 {data_type}数据路径, --data-root 与类别过滤')
+            continue
+
+        # 选择场景：优先 token -> name -> index -> 第一个
+        chosen_scene = None
+        if args.scene_token:
+            if args.scene_token in scene_to_frames:
+                chosen_scene = args.scene_token
+            else:
+                print(f"[warn] 指定的 scene_token 不在{data_type}数据中: {args.scene_token}")
+
+        if chosen_scene is None and args.scene_name:
+            # 遍历NuScenes的scene表以匹配name到token
+            try:
+                for sc in nusc.scene:
+                    if sc.get('name') == args.scene_name:
+                        maybe_token = sc.get('token')
+                        if maybe_token in scene_to_frames:
+                            chosen_scene = maybe_token
+                            break
+                if chosen_scene is None:
+                    print(f"[warn] 指定的 scene-name 未在{data_type}数据中找到: {args.scene_name}")
+            except Exception as e:
+                print(f"[warn] 解析 scene-name 失败: {e}")
+
+        if chosen_scene is None and args.scene_index is not None:
+            try:
+                idx = int(args.scene_index)
+                if 0 <= idx < len(nusc.scene):
+                    maybe_token = nusc.scene[idx]['token']
                     if maybe_token in scene_to_frames:
                         chosen_scene = maybe_token
-                        break
-            if chosen_scene is None:
-                print(f"[warn] 指定的 scene-name 未在{data_type}数据中找到: {args.scene_name}")
-        except Exception as e:
-            print(f"[warn] 解析 scene-name 失败: {e}")
-
-    if chosen_scene is None and args.scene_index is not None:
-        try:
-            idx = int(args.scene_index)
-            if 0 <= idx < len(nusc.scene):
-                maybe_token = nusc.scene[idx]['token']
-                if maybe_token in scene_to_frames:
-                    chosen_scene = maybe_token
+                    else:
+                        print(f"[warn] scene-index 对应的场景未在{data_type}数据中: index={idx}")
                 else:
-                    print(f"[warn] scene-index 对应的场景未在{data_type}数据中: index={idx}")
-            else:
-                print(f"[warn] scene-index 越界: {idx}, 合法范围 [0, {len(nusc.scene)-1}]")
-        except Exception as e:
-            print(f"[warn] 解析 scene-index 失败: {e}")
+                    print(f"[warn] scene-index 越界: {idx}, 合法范围 [0, {len(nusc.scene)-1}]")
+            except Exception as e:
+                print(f"[warn] 解析 scene-index 失败: {e}")
 
-    if chosen_scene is None:
-        chosen_scene = list(scene_to_frames.keys())[0]
-        print(f"[info] 未明确指定或未匹配到场景，使用第一个{data_type}场景: {chosen_scene}")
+        if chosen_scene is None:
+            chosen_scene = list(scene_to_frames.keys())[0]
+            print(f"[info] 未明确指定或未匹配到场景，使用第一个{data_type}场景: {chosen_scene}")
 
-    frames = scene_to_frames[chosen_scene]
-    if len(frames) == 0:
-        print(f'[warn] 该场景无{data_type}帧数据')
-        return
+        frames = scene_to_frames[chosen_scene]
+        if len(frames) == 0:
+            print(f'[warn] 该场景无{data_type}帧数据')
+            continue
 
-    print(f'开始绘制场景 {chosen_scene}，{data_type}帧数: {len(frames)}')
-    save_dir = os.path.join(base_out, chosen_scene)
-    _ensure_dir(save_dir)
+        print(f'开始绘制场景 {chosen_scene}，{data_type}帧数: {len(frames)}')
+        save_dir = os.path.join(base_out, chosen_scene)
+        _ensure_dir(save_dir)
 
-    # 根据是否分别生成GIF，初始化不同的路径列表
-    if args.gif and args.gif_separate:
-        map_img_paths: List[str] = []
-        six_img_paths: List[str] = []
-        save_dir_map = os.path.join(save_dir, 'map_frames')
-        save_dir_six = os.path.join(save_dir, 'six_view_frames')
-        _ensure_dir(save_dir_map)
-        _ensure_dir(save_dir_six)
-    else:
-        img_paths: List[str] = []
+        # 根据是否分别生成GIF，初始化不同的路径列表
+        if args.gif and args.gif_separate:
+            map_img_paths: List[str] = []
+            six_img_paths: List[str] = []
+            save_dir_map = os.path.join(save_dir, 'map_frames')
+            save_dir_six = os.path.join(save_dir, 'six_view_frames')
+            _ensure_dir(save_dir_map)
+            _ensure_dir(save_dir_six)
+        else:
+            img_paths: List[str] = []
 
-    roi_default = [-25.0, 25.0, -25.0, 25.0]
-    window = max(1, int(args.window))
-    step = max(1, int(args.interval))
-    max_frames = min(int(args.num_frames), len(frames))
+        roi_default = [-25.0, 25.0, -25.0, 25.0]
+        window = max(1, int(args.window))
+        step = max(1, int(args.interval))
+        max_frames = min(int(args.num_frames), len(frames))
 
-    # 若导出 GIF，则按帧动态计算世界坐标系 ROI，避免整体范围过大导致空白
-    world_roi = None
+        # 若导出 GIF，则按帧动态计算世界坐标系 ROI，避免整体范围过大导致空白
+        world_roi = None
 
-    start_idx = 0 if args.gif else (window - 1)
-    for idx in range(start_idx, max_frames, step):
-        if args.gif:
-            # 世界范围：根据是否累积选择 ROI 计算的帧集合
-            fig = plt.figure(figsize=(6, 6))
-            ax = fig.add_subplot(1, 1, 1)
-            if args.no_gif_accumulate:
-                sub_frames = [frames[idx]]
-            else:
-                sub_frames = frames[:idx+1]
-            world_roi = compute_optimal_roi(
-                sub_frames,
-                margin=float(args.gif_world_margin),
-                rotate_deg=float(args.pred_rotate_deg),
-                swap_xy=bool(args.pred_swap_xy),
-                flip_x=bool(args.pred_flip_x),
-                flip_y=bool(args.pred_flip_y),
-                use_world_coords=True
-            )
-            if args.no_gif_accumulate:
-                fr = frames[idx]
-                # 计算自车透明度：当前帧为1.0
-                ego_alpha = 1.0
-                draw_single_frame_world(ax, fr, world_roi,
-                                        line_width=float(args.line_width),
-                                        rotate_deg=float(args.pred_rotate_deg),
-                                        swap_xy=bool(args.pred_swap_xy),
-                                        flip_x=bool(args.pred_flip_x),
-                                        flip_y=bool(args.pred_flip_y),
-                                        ego_alpha=ego_alpha)
-                ts = fr['timestamp']
-                ax.set_title(f't={ts}  World-View', fontsize=10)
-            else:
-                draw_accumulated_world(
-                    ax, frames[:idx+1], world_roi,
-                    line_width=float(args.line_width),
+        start_idx = 0 if args.gif else (window - 1)
+        for idx in range(start_idx, max_frames, step):
+            if args.gif:
+                # 世界范围：根据是否累积选择 ROI 计算的帧集合
+                fig = plt.figure(figsize=(6, 6))
+                ax = fig.add_subplot(1, 1, 1)
+                if args.no_gif_accumulate:
+                    sub_frames = [frames[idx]]
+                else:
+                    sub_frames = frames[:idx+1]
+                world_roi = compute_optimal_roi(
+                    sub_frames,
+                    margin=float(args.gif_world_margin),
                     rotate_deg=float(args.pred_rotate_deg),
                     swap_xy=bool(args.pred_swap_xy),
                     flip_x=bool(args.pred_flip_x),
-                    flip_y=bool(args.pred_flip_y)
+                    flip_y=bool(args.pred_flip_y),
+                    use_world_coords=True
                 )
-                ts = frames[idx]['timestamp']
-                ax.set_title(f't={ts}  World-Accumulated', fontsize=10)
-        else:
-            # 保持原本稳定性叠加视图
-            sub = frames[max(0, idx - (window - 1)): idx + 1]
-            fig = plt.figure(figsize=(6, 6))
-            ax = fig.add_subplot(1, 1, 1)
-
-            # 自适应或固定 ROI：若用户自定义了 --roi（非默认值）则使用固定，否则基于窗口动态估计
-            if list(args.roi) != roi_default:
-                cur_roi = tuple(args.roi)
+                if args.no_gif_accumulate:
+                    fr = frames[idx]
+                    # 计算自车透明度：当前帧为1.0
+                    ego_alpha = 1.0
+                    draw_single_frame_world(ax, fr, world_roi,
+                                            line_width=float(args.line_width),
+                                            rotate_deg=float(args.pred_rotate_deg),
+                                            swap_xy=bool(args.pred_swap_xy),
+                                            flip_x=bool(args.pred_flip_x),
+                                            flip_y=bool(args.pred_flip_y),
+                                            ego_alpha=ego_alpha)
+                    ts = fr['timestamp']
+                    ax.set_title(f't={ts}  World-View', fontsize=10)
+                else:
+                    draw_accumulated_world(
+                        ax, frames[:idx+1], world_roi,
+                        line_width=float(args.line_width),
+                        rotate_deg=float(args.pred_rotate_deg),
+                        swap_xy=bool(args.pred_swap_xy),
+                        flip_x=bool(args.pred_flip_x),
+                        flip_y=bool(args.pred_flip_y)
+                    )
+                    ts = frames[idx]['timestamp']
+                    ax.set_title(f't={ts}  World-Accumulated', fontsize=10)
             else:
-                cur_roi = compute_optimal_roi(sub, margin=float(args.roi_margin), use_world_coords=False)
+                # 保持原本稳定性叠加视图
+                sub = frames[max(0, idx - (window - 1)): idx + 1]
+                fig = plt.figure(figsize=(6, 6))
+                ax = fig.add_subplot(1, 1, 1)
 
-            consistency = draw_overlay(ax, sub, window=window, roi=cur_roi,
-                                       alpha_decay=float(args.alpha_decay),
-                                       line_width=float(args.line_width))
+                # 自适应或固定 ROI：若用户自定义了 --roi（非默认值）则使用固定，否则基于窗口动态估计
+                if list(args.roi) != roi_default:
+                    cur_roi = tuple(args.roi)
+                else:
+                    cur_roi = compute_optimal_roi(sub, margin=float(args.roi_margin), use_world_coords=False)
 
-            # 标题：帧时间与一致性
-            ts = sub[-1]['timestamp']
-            cons_str = ' | '.join([f"{k}:{consistency.get(k, 0.0):.2f}" for k in CLASS_NAMES])
-            ax.set_title(f't={ts}  Consistency({window}): {cons_str}', fontsize=10)
+                consistency = draw_overlay(ax, sub, window=window, roi=cur_roi,
+                                           alpha_decay=float(args.alpha_decay),
+                                           line_width=float(args.line_width))
 
-        # 保存可视化帧
+                # 标题：帧时间与一致性
+                ts = sub[-1]['timestamp']
+                cons_str = ' | '.join([f"{k}:{consistency.get(k, 0.0):.2f}" for k in CLASS_NAMES])
+                ax.set_title(f't={ts}  Consistency({window}): {cons_str}', fontsize=10)
+
+            # 保存可视化帧
+            if args.gif:
+                # 生成地图帧
+                map_vis_path = save_frame(fig, save_dir_map, idx)
+                map_img_paths.append(map_vis_path)
+
+                # 生成六视图
+                st = frames[idx]['token']
+
+                six_fig = plt.figure(figsize=(8, 6))
+                six_ax = six_fig.add_subplot(1, 1, 1)
+                six_img = _six_view_mosaic(nusc, st, args.data_root)
+
+                # 显示六视图
+                six_ax.imshow(six_img)
+                six_ax.set_title(f't={frames[idx]["timestamp"]}  Six-View', fontsize=10)
+                six_ax.axis('off')
+
+                six_vis_path = save_frame(six_fig, save_dir_six, idx)
+                six_img_paths.append(six_vis_path)
+
+        # 生成GIF
         if args.gif:
-            # 生成地图帧
-            map_vis_path = save_frame(fig, save_dir_map, idx)
-            map_img_paths.append(map_vis_path)
+            # 生成地图GIF
+            if len(map_img_paths) > 0:
+                map_gif_path = os.path.join(base_out, f'{chosen_scene}_map.gif')
+                print(f'生成地图GIF: {map_gif_path}')
+                maybe_write_gif(map_img_paths, map_gif_path, fps=int(args.gif_fps))
 
-            # 生成六视图
-            if args.no_gif_accumulate:
-                st = frames[idx]['token']
-            else:
-                st = frames[idx]['token']
+            # 生成六视图GIF
+            if len(six_img_paths) > 0:
+                six_gif_path = os.path.join(base_out, f'{chosen_scene}_six_view.gif')
+                print(f'生成六视图GIF: {six_gif_path}')
+                maybe_write_gif(six_img_paths, six_gif_path, fps=int(args.gif_fps))
 
-            six_fig = plt.figure(figsize=(8, 6))
-            six_ax = six_fig.add_subplot(1, 1, 1)
-            six_img = _six_view_mosaic(nusc, st, args.data_root)
+            print(f'地图帧保存在: {save_dir_map}')
+            print(f'六视图帧保存在: {save_dir_six}')
 
-            # 显示六视图
-            six_ax.imshow(six_img)
-            six_ax.set_title(f't={frames[idx]["timestamp"]}  Six-View', fontsize=10)
-            six_ax.axis('off')
-
-            six_vis_path = save_frame(six_fig, save_dir_six, idx)
-            six_img_paths.append(six_vis_path)
-
-    # 生成GIF
-    if args.gif:
-        # 生成地图GIF
-        if len(map_img_paths) > 0:
-            map_gif_path = os.path.join(base_out, f'{chosen_scene}_map.gif')
-            print(f'生成地图GIF: {map_gif_path}')
-            maybe_write_gif(map_img_paths, map_gif_path, fps=int(args.gif_fps))
-
-        # 生成六视图GIF
-        if len(six_img_paths) > 0:
-            six_gif_path = os.path.join(base_out, f'{chosen_scene}_six_view.gif')
-            print(f'生成六视图GIF: {six_gif_path}')
-            maybe_write_gif(six_img_paths, six_gif_path, fps=int(args.gif_fps))
-
-        print(f'地图帧保存在: {save_dir_map}')
-        print(f'六视图帧保存在: {save_dir_six}')
-
-    print(f'完成，可视化结果保存在: {save_dir}')
+        print(f'完成，可视化结果保存在: {save_dir}')
 
 
 if __name__ == '__main__':

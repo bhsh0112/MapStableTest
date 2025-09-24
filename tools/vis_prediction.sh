@@ -17,15 +17,16 @@ PRED_ROTATE_DEG=${10:-0.0}
 
 # 检查必需参数
 if [ -z "$SCENE_NAME" ] || [ -z "$PREDICTION_FILE" ]; then
-    echo "错误: 必须指定场景名称和预测结果文件"
-    echo "用法: $0 <SCENE_NAME> <PREDICTION_FILE> [DATA_ROOT] [NUSC_VERSION] [OUTPUT_DIR] [GIF_MODE] [GIF_SEPARATE] [PRED_SWAP_XY] [PRED_FLIP_Y] [PRED_ROTATE_DEG]"
-    echo "示例: $0 scene-0001 results/pred.pkl /data/nuscenes v1.0-trainval outputs/vis true true true true 0.0"
+    echo "错误: 必须指定场景名称和预测结果路径（pkl文件或包含pkl的文件夹）"
+    echo "用法: $0 <SCENE_NAME> <PREDICTION_PATH> [DATA_ROOT] [NUSC_VERSION] [OUTPUT_DIR] [GIF_MODE] [GIF_SEPARATE] [PRED_SWAP_XY] [PRED_FLIP_Y] [PRED_ROTATE_DEG]"
+    echo "示例(单文件): $0 scene-0001 results/pred.pkl /data/nuscenes v1.0-trainval outputs/vis true true true true 0.0"
+    echo "示例(目录):   $0 scene-0001 results/pred_dir /data/nuscenes v1.0-trainval outputs/vis true true true true 0.0"
     exit 1
 fi
 
-# 检查文件是否存在
-if [ ! -f "$PREDICTION_FILE" ]; then
-    echo "错误: 预测结果文件不存在: $PREDICTION_FILE"
+# 检查文件或目录是否存在
+if [ ! -f "$PREDICTION_FILE" ] && [ ! -d "$PREDICTION_FILE" ]; then
+    echo "错误: 预测结果路径不存在(需为pkl文件或目录): $PREDICTION_FILE"
     exit 1
 fi
 
@@ -38,7 +39,7 @@ fi
 echo "MapTR预测结果可视化"
 echo "================================"
 echo "场景名称: $SCENE_NAME"
-echo "预测文件: $PREDICTION_FILE"
+echo "预测路径: $PREDICTION_FILE"
 echo "数据根目录: $DATA_ROOT"
 echo "NuScenes版本: $NUSC_VERSION"
 echo "输出目录: $OUTPUT_DIR"
@@ -49,9 +50,14 @@ echo "翻转Y轴: $PRED_FLIP_Y"
 echo "旋转角度: $PRED_ROTATE_DEG"
 echo "================================"
 
-# 从预测文件名推导“配置名”（无扩展名），用于组织输出目录
-CONFIG_NAME=$(basename "$PREDICTION_FILE")
-CONFIG_NAME="${CONFIG_NAME%.*}"
+# 从预测路径推导“配置名”：
+# - 若为文件，去除扩展名；若为目录，取目录名
+if [ -d "$PREDICTION_FILE" ]; then
+    CONFIG_NAME=$(basename "$PREDICTION_FILE")
+else
+    CONFIG_NAME=$(basename "$PREDICTION_FILE")
+    CONFIG_NAME="${CONFIG_NAME%.*}"
+fi
 
 # 如果 SCENE_NAME 为 all，则遍历所有场景并逐一可视化
 if [ "$SCENE_NAME" = "all" ]; then
